@@ -35,6 +35,12 @@ const NOCHE_HIGIENE = { id: "higiene_noche", label: "Higiene y correcto guardado
 
 const RATING_THRESHOLD = 6; // puntaje <= este valor obliga a completar el detalle
 
+// Contraseña simple para poder borrar un registro desde el Historial.
+// Validación del lado del navegador (arquitectura sin login): útil para evitar
+// borrados accidentales del día a día, pero no es una barrera de seguridad real
+// contra alguien que inspeccione el código o llame directo a la API.
+const ADMIN_DELETE_PASSWORD = "789";
+
 /* ---------------------------- Datos (Supabase) ---------------------------- */
 
 function rowToRegistro(row) {
@@ -65,6 +71,14 @@ async function loadRegistros() {
     throw error;
   }
   return (data || []).map(rowToRegistro);
+}
+
+async function deleteRegistro(id) {
+  const { error } = await sbClient.from("registros").delete().eq("id", id);
+  if (error) {
+    console.error("Error borrando registro en Supabase", error);
+    throw error;
+  }
 }
 
 async function saveRegistro(registro) {
@@ -879,7 +893,8 @@ function renderHistorial() {
     });
 }
 
-function renderHistorialContent(all) {
+function renderHistorialContent(registros) {
+  let all = registros;
   const turnoFilter = el("select", { id: "f-turno" }, [
     el("option", { value: "" }, "Todos los turnos"),
     el("option", { value: "PM" }, "Turno PM"),
@@ -925,7 +940,7 @@ function renderHistorialContent(all) {
           el("th", {}, "Momento"),
           el("th", {}, "Supervisor"),
           el("th", {}, "Estado"),
-          el("th", {}, ""),
+          el("th", {}, "Acciones"),
         ]),
       ]),
     ]);
@@ -933,23 +948,58 @@ function renderHistorialContent(all) {
 
     list.forEach((r) => {
       const alert = hasAlert(r);
+
+      const detailBtn = el("button", { class: "detail-toggle" }, "Ver detalle");
+
+      const deleteBtn = el(
+        "button",
+        {
+          class: "detail-toggle delete-toggle",
+          style: "color:#c0392b;margin-left:10px;",
+          onclick: async () => {
+            const pass = window.prompt("Contraseña para borrar este registro:");
+            if (pass === null) return;
+            if (pass !== ADMIN_DELETE_PASSWORD) {
+              window.alert("Contraseña incorrecta.");
+              return;
+            }
+            const ok = window.confirm(
+              `¿Borrar el registro del ${formatFechaDisplay(r.fecha)} (${r.turno}, ${r.supervisorName})? Esta acción no se puede deshacer.`
+            );
+            if (!ok) return;
+            deleteBtn.disabled = true;
+            deleteBtn.textContent = "Borrando...";
+            try {
+              await deleteRegistro(r.id);
+              all = all.filter((x) => x.id !== r.id);
+              applyFilters();
+            } catch (err) {
+              window.alert("No se pudo borrar el registro (revisá tu conexión a internet).");
+              deleteBtn.disabled = false;
+              deleteBtn.textContent = "Borrar";
+            }
+          },
+        },
+        "Borrar"
+      );
+
       const row = el("tr", { class: alert ? "has-alert" : "" }, [
         el("td", {}, `${formatFechaDisplay(r.fecha)} · ${r.hora} hs`),
         el("td", {}, el("span", { class: "pill " + (r.turno === "PM" ? "pm" : "noche") }, r.turno)),
         el("td", {}, r.checkpointLabel),
         el("td", {}, r.supervisorName),
         el("td", {}, el("span", { class: "pill " + (alert ? "alert" : "ok") }, alert ? "Con alertas" : "OK")),
-        el("td", {}, el("button", { class: "detail-toggle" }, "Ver detalle")),
+        el("td", {}, [detailBtn, deleteBtn]),
       ]);
 
       const detailRow = el("tr", { style: "display:none;" }, [
         el("td", { colspan: "6" }, buildDetail(r)),
       ]);
 
-      row.querySelector(".detail-toggle").addEventListener("click", () => {
+      detailBtn.addEventListener("click", () => {
         const visible = detailRow.style.display !== "none";
         detailRow.style.display = visible ? "none" : "table-row";
-        row.querySelector(".detail-toggle").textContent = visible ? "Ver detalle" : "Ocultar detalle";
+        detailBtn.textContent = visible ? "Ver detalle" : "Ocultar detalle";
       });
 
       tbody.appendChild(row);
